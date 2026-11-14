@@ -1,0 +1,82 @@
+name: Build APK
+
+on:
+  push:
+    paths-ignore:
+      - 'build-log.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Unzip and build
+        id: build
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -eo pipefail
+          {
+            echo "== repo files =="; ls -la
+            ZIP=$(find . -name '*.zip' -not -path './.git/*' | head -n1 || true)
+            echo "zip: $ZIP"
+            rm -rf /tmp/proj && mkdir -p /tmp/proj
+            unzip -q -o "$ZIP" -d /tmp/proj
+            SETTINGS=$(find /tmp/proj -name 'settings.gradle*' | head -n1 || true)
+            echo "settings: $SETTINGS"
+            cd "$(dirname "$SETTINGS")"
+            echo "== project files =="; ls -la
+            java -version
+            gradle --version
+            gradle :app:assembleDebug --no-daemon --stacktrace
+          } 2>&1 | tee /tmp/build.log
+
+      - name: Save build log to repo
+        if: always()
+        run: |
+          [ -f /tmp/build.log ] || echo "build step did not run (an earlier step failed)" > /tmp/build.log
+          {
+            echo "RESULT: ${{ steps.build.outcome }}"
+            echo "--- first 40 lines ---"
+            head -n 40 /tmp/build.log
+            echo "--- last 150 lines ---"
+            tail -n 150 /tmp/build.log
+          } > build-log.txt
+          git config user.name "build-bot"
+          git config user.email "build-bot@users.noreply.github.com"
+          git add build-log.txt
+          git commit -m "Update build log" || true
+          git push || true
+
+      - name: Publish APK as a release
+        if: steps.build.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK=$(find /tmp/proj -name app-debug.apk | head -n1)
+          cp "$APK" FusionLauncher.apk
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest FusionLauncher.apk \
+            --title "Fusion Launcher (latest build)" \
+            --notes "Debug APK. Download FusionLauncher.apk and install it on your phone." \
+            --target "${{ github.sha }}"
+
+      - name: Fail the job if the build failed
+        if: steps.build.outcome != 'success'
+        run: exit 1
