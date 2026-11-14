@@ -1,0 +1,5 @@
+RESULT: skipped
+--- first 40 lines ---
+build step did not run (an earlier step failed)
+--- last 150 lines ---
+build step did not run (an earlier step failed)
